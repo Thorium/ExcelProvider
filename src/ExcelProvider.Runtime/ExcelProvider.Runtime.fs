@@ -124,7 +124,7 @@ module internal ExcelAddressing =
 
                 topLeft,
                 { topLeft with
-                    Row = sheet.Rows.Count
+                    Row = sheet.Rows.Count - 1
                     Column = sheet.Columns.Count - 1 },
                 sheet
 
@@ -151,7 +151,7 @@ module internal ExcelAddressing =
 
         let minRow = ranges |> Seq.map (fun range -> range.StartRow) |> Seq.min
         let maxRow = ranges |> Seq.map (fun range -> range.EndRow) |> Seq.max
-        let rowCount = maxRow - minRow
+        let rowCount = (maxRow - minRow) + 1
 
         let rangeViewOffsetRecord rangeView =
             seq { rangeView.StartColumn .. rangeView.EndColumn }
@@ -349,8 +349,18 @@ type Row(documentId, sheetname, rowIndex, getCellValue: int -> int -> obj, colum
         let value = this.GetValue columnIndex
 
         try
-            value :?> 'a
-        with :? InvalidCastException ->
+            match value with
+            | null -> value :?> 'a
+            | _ when typeof<'a> = typeof<string> -> (box (string value)) :?> 'a
+            //| :? string as valueStr when typeof<'a> = typeof<double> -> (box (Double.Parse valueStr)) :?> 'a
+            | :? double as valueDbl when typeof<'a> = typeof<DateTime> -> (box (DateTime.FromOADate valueDbl)) :?> 'a
+            | :? string as valueStr when typeof<'a> = typeof<DateTime> -> (box (DateTime.Parse valueStr)) :?> 'a
+            | _ -> value :?> 'a
+        with
+        | :? InvalidCastException
+        | :? ArgumentException
+        | :? ArgumentNullException
+        | :? InvalidCastException ->
             failInvalidCast value (value.GetType()) typeof<'a> columnName rowIndex documentId sheetname
 
     member this.TryGetNullableValue<'a when 'a: (new: unit -> 'a) and 'a: struct and 'a :> ValueType>
@@ -360,9 +370,21 @@ type Row(documentId, sheetname, rowIndex, getCellValue: int -> int -> obj, colum
         let value = this.GetValue columnIndex
 
         try
-            (value :?> Nullable<'a>).GetValueOrDefault()
-        with :? InvalidCastException ->
+            match value with
+            | null -> (value :?> Nullable<'a>).GetValueOrDefault()
+            | _ when typeof<'a> = typeof<string> -> (box (string value)) :?> 'a
+            //| :? string as valueStr when typeof<'a> = typeof<double> -> (box (Double.Parse valueStr)) :?> 'a
+            | :? double as valueDbl when typeof<'a> = typeof<DateTime> -> (box (DateTime.FromOADate valueDbl)) :?> 'a
+            | :? string as valueStr when typeof<'a> = typeof<DateTime> -> (box (DateTime.Parse valueStr)) :?> 'a
+            | _ -> value :?> 'a
+
+        with
+        | :? InvalidCastException
+        | :? ArgumentException
+        | :? ArgumentNullException
+        | :? FormatException ->
             failInvalidCast value (value.GetType()) typeof<'a> columnName rowIndex documentId sheetname
+
 
     override this.ToString() =
         let columnValueList =
@@ -385,7 +407,9 @@ type ExcelFileInternal private (view, documentId, sheetname, hasheaders) =
         let buildRow rowIndex =
             new Row(documentId, sheetname, rowIndex, getCellValue view, columns)
 
-        seq { (if hasheaders then 1 else 0) .. view.RowCount } |> Seq.map buildRow
+        let zeroBasedLastIndex = view.RowCount - 1
+
+        seq { (if hasheaders then 1 else 0) .. zeroBasedLastIndex } |> Seq.map buildRow
 
     new(filename, sheetname, range, hasheaders) =
         let view = openWorkbookView filename sheetname range
